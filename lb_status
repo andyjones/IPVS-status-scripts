@@ -1,0 +1,186 @@
+#!/usr/bin/perl
+
+use strict;
+
+#TCP  213.165.2.190:80 rr
+#  -> 213.165.2.201:80             Route   1      0          0
+#  -> 213.165.2.204:80             Route   1      0          0
+#  -> 213.165.2.209:80             Route   0      0          0
+#  -> 213.165.2.203:80             Route   1      0          0
+#  -> 213.165.2.210:80             Route   1      0          0
+#  -> 213.165.2.211:80             Route   1      0          0
+#  -> 213.165.2.213:80             Route   1      0          0
+
+use Socket;
+use Perl6::Form;
+
+my $lb_status_ref = lb_status();
+display_lb_status( $lb_status_ref, { services => [ @ARGV ] });
+
+sub display_lb_status {
+     my $status_ref = shift;
+     my $options_ref = shift || {};
+
+     if ( !$status_ref ) {
+         die "No load balancing. Not running?";
+     }
+
+     my %status = %$status_ref;
+
+     if ( $options_ref && $options_ref->{services} ) {
+         my %only_services;
+
+         my $services_ref = $options_ref->{services};
+         foreach my $service ( ref($services_ref) ? @$services_ref : $services_ref ) {
+             $only_services{ $service } = 1;
+         }
+
+         foreach my $service ( keys %status ) {
+             if ( !exists($only_services{ $service }) ) {
+                 delete $status{ $service };
+             }
+         }
+     }
+
+     my (@failures, @successes);
+
+     foreach my $service ( sort { lc($a) cmp lc($b) } keys %status ) {
+         my $services_ref = $status{ $service };
+
+         my $service_summary = "$service\n";
+
+         my $service_failed = 0;
+
+         foreach my $service_ref ( sort { $a->{port} <=> $b->{port} } @$services_ref ) {
+             my @status;
+             if ( $service_ref->{working} ) {
+                 foreach my $active_ref ( sort { lc($a->{host}) cmp lc($b->{host}) } @{ $service_ref->{active} } ) {
+                     push @status, $active_ref->{host};
+                 }
+             }
+             else {
+                 $service_failed = 1;
+                 push @status, 'NOT WORKING';
+             }
+
+             my $protocol = 'port ' . $service_ref->{port};
+
+             $service_summary .= form "    {[[[[[[[[[[[[[[[[[[[} {[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[}",
+                             $protocol,  \@status;
+         }
+
+         if ( $service_failed ) {
+             push @failures, $service_summary;
+         }
+         else {
+             push @successes, $service_summary;
+         }
+     }
+
+     my ( @summaries ) = grep { $_ } @failures, @successes;
+
+     print join( "--------------\n", @summaries );
+}
+
+sub lb_status {
+    open( my $fh, 'ipvsadm -L -n |' )
+        or die "Unable to run ipvsadm: $!";
+
+    my %services;
+
+    my %current_service;
+
+    my $save_service_ref = sub {
+        if ( $current_service{host} ) {
+            my $host = $current_service{host};
+            my $host_ref = $services{ $host } ||= [];
+
+            push @$host_ref, { %current_service };
+        }
+
+        %current_service = (
+            active   => [],
+            inactive => [],
+            working  => 0,
+        );
+    };
+
+    LINE:
+    while (<$fh>) {
+        chomp;
+
+#TCP  213.165.2.190:443 wrr persistent 300
+        if ( m/TCP\s+(\S+)\s+(\S+)\s*(.+)?$/ ) {
+            $save_service_ref->();
+            my $ip_and_port = $1;
+            my $scheduler = $2;
+            my $options   = $3;
+            my ($ip,$port) = split /:/, $ip_and_port;
+
+            my $host = ip_to_host( $ip );
+
+            $current_service{host} = $host || $ip;
+            $current_service{ip}   = $ip;
+            $current_service{port} = $port;
+            $current_service{scheduler} = $scheduler;
+
+            next LINE;
+        }
+
+        if ( !$current_service{host} ) {
+#            print "Skipping $_\n";
+            next LINE;
+        }
+        
+#  -> 213.165.2.213:80             Route   1      0          0
+        if ( m/->\s+(\S+)\s+(\S+)\s+(\d+)\s+(\d+)\s*/ ) {
+            my $ip_and_port = $1;
+            my $type        = $2;
+            my $weight      = $3;
+            my $active      = $4;
+            my $inactive    = $5;
+
+            my ($ip, $port) = split /:/, $ip_and_port;
+
+            my $host = ip_to_host( $ip );
+
+            my %real_server = (
+                host => $host,
+                ip   => $ip,
+                port => $port,
+                type => $type,
+                weight => $weight,
+                active => $active,
+                inactive => $inactive,
+            );
+
+            if ( $type eq 'Route' ) {
+                if ( $weight ) {
+                    $current_service{working} = 1;
+
+                    push @{ $current_service{active} }, \%real_server;
+                }
+                else {
+                    push @{ $current_service{inactive} }, \%real_server;
+                }
+            }
+            else {
+                $current_service{working} = 0;
+            }
+
+            next LINE;
+        }
+    }
+
+    $save_service_ref->();
+
+    close $fh;
+
+    return \%services;
+}
+
+sub ip_to_host {
+    my $ip = shift;
+    my $iaddr = inet_aton( $ip );
+    return gethostbyaddr( $iaddr, AF_INET ) || $ip;
+}

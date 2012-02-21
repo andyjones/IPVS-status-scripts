@@ -1,0 +1,4 @@
+Home for various scripts to see what is going on in IPVS
+
+lb_status:
+   * simplifies output from ipvsadm so it is easy to see what is in the load balancer pool
