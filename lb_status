@@ -2,6 +2,10 @@
 
 use strict;
 
+# Display a summary of IPVS admin status
+# you can also filter the status by 'service'
+# so the output is suitable to be used by watch
+
 #TCP  213.165.2.190:80 rr
 #  -> 213.165.2.201:80             Route   1      0          0
 #  -> 213.165.2.204:80             Route   1      0          0
