@@ -28,19 +28,9 @@ sub display_lb_status {
      my %status = %$status_ref;
 
      if ( $options_ref && $options_ref->{services} ) {
-         my %only_services;
-
-         my $services_ref = $options_ref->{services};
-         foreach my $service ( ref($services_ref) ? @$services_ref : $services_ref ) {
-             $only_services{ $service } = 1;
-         }
-
-         foreach my $service ( keys %status ) {
-             if ( !exists($only_services{ $service }) ) {
-                 delete $status{ $service };
-             }
-         }
+	 %status = only_services( \%status, $options_ref->{services} );
      }
+
 
      my (@failures, @successes);
 
@@ -184,3 +174,33 @@ sub ip_to_host {
     my $iaddr = inet_aton( $ip );
     return gethostbyaddr( $iaddr, AF_INET ) || $ip;
 }
+
+# removes all services but the ones specified
+sub only_services {
+    my $status_ref = shift;
+    my $services_ref = shift;
+
+    my %status = %$status_ref;
+
+    my %only_services;
+
+    foreach my $service ( ref($services_ref) ? @$services_ref : $services_ref ) {
+        if ( $service ) {
+             $only_services{ $service } = 1;
+        }
+    }
+
+    if ( !%only_services ) {
+        return %status;
+    }
+
+    foreach my $service ( keys %status ) {
+        if ( !exists($only_services{ $service }) ) {
+            delete $status{ $service };
+        }
+    }
+
+    return %status;
+}
+
+
